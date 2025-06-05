@@ -1,0 +1,489 @@
+---
+title: "OLS, ANN and SVR models for life expectancy"
+format: docx
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r}
+#| message: false
+#| echo: false
+## Necessary libraries 
+library(neuralnet)
+library(nnet)
+library(NeuralNetTools)
+library(MASS)
+library(ISLR)
+library(caTools) # sample.split
+library(boot) # cv.glm
+library(faraway) # compact lm summary "sumary" function
+library(caret) # useful tools for machine learning
+library(corrplot)
+library(hydroGOF)
+```
+
+
+```{r}
+# use a standard seed throughout
+seed.val <- 200
+
+set.seed(seed.val)
+df = read.csv("data_for_analysis.csv")
+```
+
+```{r}
+names(df)
+```
+
+
+```{r}
+# Train-test random splitting for linear model
+# sample.split creates a Boolean Vector
+df.split <- sample.split(df$Life_exp, SplitRatio = 0.75) # 75% for training, 25% for testing
+df.train <- df[df.split, ]
+df.test <- df[!df.split, ]
+```
+
+### Ordinary Least Squares (OLS) model
+
+```{r}
+# Fitting linear model using both lm and glm functions
+df.glm <- glm(Life_exp ~ GDP_percapitaUSD+Ext_debt+Age_dep_ratio+Population+CBR+Access_fuels_cooking+
+                Access_electricity+infant_mortality+neonatal_deaths, data=df.train)
+
+df.lm <- lm(Life_exp ~ GDP_percapitaUSD+Ext_debt+Age_dep_ratio+Population+CBR+Access_fuels_cooking+
+                Access_electricity+infant_mortality+neonatal_deaths, data=df.train)
+
+#summary(df.glm)
+summary(df.lm)
+```
+
+### Artificial Neural Network (ANN) model
+
+```{r}
+## ---- neuralnet_fit ----
+# The predictor vars must be scaled data for the ANN fitting
+df.scaled <- as.data.frame(scale(df))
+min.Life_exp <- min(df$Life_exp)
+max.Life_exp <- max(df$Life_exp)
+# response var must be scaled to [0 < resp < 1]
+df.scaled$Life_exp <- scale(df$Life_exp
+                                           , center = min.Life_exp
+                                           , scale = max.Life_exp- min.Life_exp)
+
+# Train-test split
+df.train.scaled <- df.scaled[df.split, ]
+df.test.scaled <- df.scaled[!df.split, ]
+```
+
+
+```{r}
+# 2 models, one with 2 layers of 5 and 3
+# the second with one layer of 7
+# linear output is used for a regression problem
+df.nn.5.3 <- neuralnet(Life_exp ~ GDP_percapitaUSD+Ext_debt+Age_dep_ratio+Population+CBR+Access_fuels_cooking+
+                Access_electricity+infant_mortality+neonatal_deaths
+                                          , data=df.train.scaled
+                                          , hidden=c(5,3)
+                                          , linear.output=TRUE)
+
+df.nn.7 <- neuralnet(Life_exp ~ GDP_percapitaUSD+Ext_debt+Age_dep_ratio+Population+CBR+Access_fuels_cooking+
+                Access_electricity+infant_mortality+neonatal_deaths 
+                                        , data=df.train.scaled
+                                        , hidden=7
+                                        , linear.output=TRUE)
+```
+
+
+```{r}
+## ---- performance_metrics ----
+# Predict - remember the output is scaled
+df.5.3.preds.scaled <- neuralnet::compute(df.nn.5.3
+                                                             , df.test.scaled[,2:10])
+df.7.preds.scaled <- neuralnet::compute(df.nn.7
+                                                           , df.test.scaled[,2:10])
+# Results from NN are normalized (scaled)
+# unscale the response to compensate for rounding errors
+df.Life_exp.unscaled <- (df.test.scaled$Life_exp) * (max.Life_exp - min.Life_exp) + min.Life_exp
+
+# Descaling for comparison
+df.5.3.preds <- df.5.3.preds.scaled$net.result * (max(df$Life_exp) - min(df$Life_exp)) + min(df$Life_exp)
+df.7.preds <- df.7.preds.scaled$net.result * (max(df$Life_exp) - min(df$Life_exp)) + min(df$Life_exp)
+```
+
+
+```{r}
+# Predicted, actual, and error on a table for hidden layer c(5,3)
+error = df.Life_exp.unscaled - df.5.3.preds
+PredictedNN = df.5.3.preds
+ActualNN = df.Life_exp.unscaled
+Pred_act_err = data.frame(PredictedNN, ActualNN, error)
+```
+
+
+```{r}
+knitr::kable(head(Pred_act_err), digits=4, caption = "Predicted, actual, and error values for NN hidden 5,3 layers")
+```
+
+
+```{r}
+# Predicted, actual, and error on a table for hidden layer 8
+error = df.Life_exp.unscaled - df.7.preds
+PredictedNN = df.7.preds
+ActualNN = df.Life_exp.unscaled
+Pred_act_err = data.frame(PredictedNN, ActualNN, error)
+```
+
+
+```{r}
+knitr::kable(head(Pred_act_err), digits=4, caption = "Predicted, actual, and error values for NN hidden 7 layers")
+```
+
+
+```{r}
+# Calculating MSE and other error metrics for LM models using gof
+df.5.3.rm  = gof(df.5.3.preds, df.Life_exp.unscaled)
+df.7.rm <- gof(df.7.preds, df.Life_exp.unscaled)
+
+# Predicted data from lm
+df.glm.preds <- predict(df.glm, newdata = df.test)
+
+# Predicted, actual, and error on a table for LM
+error = df.test$Life_exp - df.glm.preds
+PredictedLM = df.glm.preds
+ActualLM = df.test$Life_exp
+Pred_act_err = data.frame(PredictedLM, ActualLM, error)
+```
+
+```{r}
+knitr::kable(head(Pred_act_err), digits=4, caption = "Predicted, actual, and error values for LM")
+```
+
+
+```{r fig3.3a, echo=FALSE, fig.width=7,fig.height=6,fig.cap="\\label{fig:fig3.3a} Artificial Neural Network for Life expectancy (hidden layer=5,3)"}
+# Visualize the NN plots
+plot(df.nn.5.3, rep = "best")
+```
+
+
+```{r  fig3.3b, echo=FALSE, fig.width=7,fig.height=6,fig.cap="\\label{fig:fig3.3b} Artificial Neural Network for Life expectancy (hidden layer=7)"}
+plot(df.nn.7, rep = "best")
+```
+
+
+```{r}
+## ---- nn_model_NNTools_plots ----
+# NeuralNetTools
+#plotnet(Df.nn.5.3)
+#plotnet(Df.nn.7)
+
+## ---- nn_gwplot ----
+#gwplot(Df.nn.7, selected.covariate = "Voltage")
+```
+
+### Support Vector Regression (SVR) Model
+
+```{r}
+# Load necessary libraries
+library(e1071)
+
+# Assuming you have already loaded the necessary libraries and imported your dataset
+
+# Create a SVR model
+svr_model <- svm(
+  Life_exp ~ .,  # Formula for SVR, assuming all variables in the dataframe are predictors
+  data = df.test,
+  type = "eps-regression",  # Specify SVR for regression
+  kernel = "radial"  # Radial basis function (RBF) kernel is commonly used
+)
+
+# Summary of the SVR model
+summary(svr_model)
+```
+
+```{r}
+# Predict using the SVR model
+predictions_svr <- predict(svr_model, data = df.test)
+```
+
+```{r}
+# Predicted, actual, and error on a table for SVR
+error = df$Life_exp - predictions_svr
+PredictedSVR = predictions_svr
+Actual = df$Life_exp
+Predsvr_act_err = data.frame(PredictedSVR, Actual, error)
+```
+
+
+```{r}
+knitr::kable(head(Predsvr_act_err), digits=4, caption = "Predicted, actual, and error values for SVR model")
+```
+
+
+### Obtaining the performance error metrics
+
+```{r}
+# Calculating MSE and other error metrics for LM models using gof
+df.glm.rm <- gof(df.glm.preds, df.test$Life_exp)
+
+df.svr <- gof(predictions_svr, df.test$Life_exp) # for SVR model
+
+# Compare the metrics
+print("OLS or LM regression measures")
+head(df.glm.rm)
+print("NN.5.3 regression measures")
+head(df.5.3.rm)
+print("NN.7 regression measures")
+head(df.7.rm) 
+print("SVR regression measures")
+head(df.svr) 
+
+
+LM = df.glm.rm
+ANN_5.3 = df.5.3.rm
+ANN_7 = df.7.rm
+SVR = df.svr
+
+metric_all = data.frame(LM, ANN_5.3, ANN_7, SVR)
+```
+
+```{r}
+knitr::kable(head(metric_all), digits=4, caption = "Comparison of metrics from various models")
+```
+
+
+```{r}
+# ---- pred_fitted_plots ----
+# Plot real vs predictions
+par(mfrow=c(1,4))
+plot(df.test$Life_exp
+     , df.5.3.preds
+     , col="red"
+     , main="Actual vs predicted NN\ntwo hidden layers"
+     , pch=18
+     , cex=0.7
+     , xlab = "Actual Value"
+     , ylab = "Predicted Value")
+abline(0,1,lwd=2)
+legend("bottomright",legend="NN.5.3"
+       ,pch=18,col="red", bty="n")
+
+plot(df.test$Life_exp
+     , df.7.preds
+     , col="green"
+     , main="Real vs predicted NN\nsingle hidden layer"
+     , pch=18
+     , cex=0.7
+     , xlab = "Actual Value"
+     , ylab = "Predicted Value")
+abline(0,1,lwd=2)
+legend("bottomright",legend="NN.8",pch=18,col="green", bty="n")
+
+plot(df.test$Life_exp
+     , df.glm.preds
+     , col="black"
+     , main="Real vs predicted LM"
+     , pch=18
+     , cex=0.7
+     , xlab = "Actual Value"
+     , ylab = "Predicted Value")
+abline(0,1,lwd=2)
+legend("bottomright",legend="LM",pch=18,col="black", bty="n", cex=.95)
+
+plot(df.test$Life_exp
+     , predictions_svr
+     , col="blue"
+     , main="Real vs predicted SVR"
+     , pch=18
+     , cex=0.7
+     , xlab = "Actual Value"
+     , ylab = "Predicted Value")
+abline(0,1,lwd=2)
+legend("bottomright",legend="SVM",pch=18,col="blue", bty="n", cex=.95)
+par(mfrow = c(1, 1))
+```
+
+
+```{r}
+# Compare predictions on the same plot
+plot(df.test$Life_exp
+     , df.5.3.preds
+     , col="red"
+     , main="Actual vs Predicted"
+     , xlab = "Actual Value"
+     , ylab = "Predicted Value"
+     , pch=18,cex=0.7)
+points(df.test$Life_exp
+       , df.7.preds
+       , col="green"
+       , pch=18
+       , cex=0.7)
+points(df.test$Life_exp
+       , df.glm.preds
+       , col="black"
+       , pch=18
+       , cex=0.7)
+points(df.test$Life_exp
+       , predictions_svr
+       , col="blue"
+       , pch=18
+       , cex=0.7)
+abline(0,1,lwd=2)
+legend("bottomright"
+       , legend=c("NN.5.3","NN.7","LM", "SVR")
+       , pch=18
+       , col=c("red","green","black","blue"))
+```
+
+
+```{r}
+
+# ---- pred_resid_plots ----
+# Plot fitted vs residual
+par(mfrow=c(1,4))
+plot(df.5.3.preds
+     , df.5.3.preds - df.test$Life_exp
+     , col="red"
+     , main="Fitted vs residual NN\ntwo hidden layers"
+     , pch=18
+     , cex=0.7
+     , xlab = "Predicted Value"
+     , ylab = "Residual")
+abline(0,0,lwd=2)
+legend("bottomright",legend="NN.5.3"
+       ,pch=18,col="red", bty="n")
+
+plot(df.7.preds
+     , df.7.preds - df.test$Life_exp
+     , col="green"
+     , main="Fitted vs residual NN\none hidden layer"
+     , pch=18
+     , cex=0.7
+     , xlab = "Predicted Value"
+     , ylab = "Residual")
+abline(0,0,lwd=2)
+legend("bottomright",legend="NN.8",pch=18,col="green", bty="n")
+
+plot(df.glm.preds
+     , df.glm.preds - df.test$Life_exp
+     , col="black"
+     , main="Fitted vs residual lm"
+     , pch=18
+     , cex=0.7
+     , xlab = "Predicted Value"
+     , ylab = "Residual")
+abline(0,0,lwd=2)
+legend("bottomright",legend="LM",pch=18,col="black", bty="n", cex=.95)
+
+plot(df.glm.preds
+     , predictions_svr - df.test$Life_exp
+     , col="blue"
+     , main="Fitted vs residual SVM"
+     , pch=18
+     , cex=0.7
+     , xlab = "Predicted Value"
+     , ylab = "Residual")
+abline(0,0,lwd=2)
+legend("bottomright",legend="SVM",pch=18,col="blue", bty="n", cex=.95)
+par(mfrow = c(1, 1))
+```
+
+### Random Forest model
+
+```{r}
+library(randomForest)
+
+# Train the Random Forest regression model
+rf_model <- randomForest(
+  Life_exp ~ .,  # Formula for regression, assuming all columns except Life_exp are predictors
+  data = df.test,
+  ntree = 100,   # Number of trees in the forest
+  mtry = 4       # Number of variables randomly sampled as candidates at each split
+)
+
+```
+
+
+```{r}
+# Make predictions using the trained Random Forest model on the test set
+predictions_rf <- predict(rf_model, data = df.test)
+
+# predicted values
+predictions_rf <- predictions_rf
+
+# Print the predicted values
+print(predictions_rf)
+```
+
+```{r}
+df.rf <- gof(predictions_rf, df.test$Life_exp) # for SVR model
+df.rf
+```
+
+
+### Gradient Boosting Machine (XGBoost) model
+
+```{r}
+library(xgboost)
+# Define XGBoost parameters
+params <- list(
+  objective = "reg:squarederror",  # Specify regression objective
+  eval_metric = "rmse",            # Evaluation metric (RMSE)
+  nrounds = 100,                 # Number of boosting rounds (newer versions use num_round instead of nrounds)
+  eta = 0.1,                       # Learning rate
+  max_depth = 6                    # Maximum depth of trees
+)
+
+# Train the XGBoost model
+xgb_model <- xgboost(data = as.matrix(df.train[, -which(names(df.train) == "Life_exp")]),  # Exclude target variable
+                     label = df.train$Life_exp,nrounds = 100, params=params)
+
+```
+
+
+```{r}
+# Make predictions using the trained XGBoost model on the test set
+predictions_xgb <- predict(xgb_model, as.matrix(df.test[, -which(names(df.test) == "Life_exp")]))  # Exclude target variable
+
+# Print the predicted values
+print(predictions_xgb)
+```
+
+
+```{r}
+df.xgb <- gof(predictions_xgb, df.test$Life_exp) # for SVR model
+df.xgb
+```
+
+
+**Conclusion**
+
+Achieving a low RMSE (Root Mean Squared Error) of 0.02 indicates that the XGBoost model is performing very well in predicting life expectancy based on the economic factors and other variables included in the analysis. A low RMSE means that the predicted values are very close to the actual values, which is a strong indicator of the model's accuracy and predictive power.
+
+
+### Possible visualization for XGBoost model
+
+**Feature importance**
+
+```{r}
+# Extract feature importance from the XGBoost model
+importance_matrix <- xgb.importance(model = xgb_model)
+
+# Extract feature names and importance scores
+feature_names <- importance_matrix$Feature
+importance_scores <- importance_matrix$Gain
+
+# Sort feature importance scores and names
+sorted_indices <- order(importance_scores, decreasing = TRUE)
+sorted_features <- feature_names[sorted_indices]
+sorted_scores <- importance_scores[sorted_indices]
+
+# Plot feature importance using a bar plot
+barplot(sorted_scores, names.arg = sorted_features, horiz = TRUE,
+        main = "Feature Importance", col = "skyblue", border = "black", las = 1)
+```
+
+```{r}
+data.frame(sorted_features,sorted_indices,sorted_scores)
+```
+
